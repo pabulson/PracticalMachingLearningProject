@@ -1,0 +1,137 @@
+---
+title: "Practical Maching Learning Weight Lifting Exercise Prediction"
+author: "Paul Bulson"
+date: "Saturday, January 24, 2015"
+output: html_document
+---
+
+With thanks to Groupware@LES for providing the dataset <http://groupware.les.inf.puc-rio.br/har> and <http://www.stackoverflow.com> for R assistance.
+
+# Executive Summary
+
+The goal was using motion data captured from six paricipants performing a series of exercises, to develop a prediction model that accepts the motion data and predicts the exercise performed. After building three models, a random forest model achieved over 99% accuracy. The out of sample error rate was 0.578%.
+
+# Data Processing
+
+The initial step was to read the data and split into a train and test datasets. To build the model, use the training dataset. To estimate the out of sample error using cross-validation, feed the resulting model the testing dataset and analyze the results.
+
+```{r warning=FALSE}
+library(caret)
+library(rattle)
+library(reshape2)
+library(ggplot2)
+data <- read.csv("pml-training.csv")
+
+# Split data into Training and Testing
+set.seed(81115)
+inTrain <- createDataPartition(y=data$classe, p=.7, list=FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+```
+
+# Feature Selection
+
+As part of the process of selecting the appropriate predictors, eliminate the noise columns, those columns largely devoid of value, and those columns with near zero variance.
+
+```{r warning=FALSE}
+# drop noise column
+training <- training[,-(1:7), drop=FALSE]
+
+# remove columns with too many missing values
+predictorMissingValueCount <- sapply(training, function (x) sum(is.na(x) | x == ""))
+training <- training[,predictorMissingValueCount<100]
+
+# remove 0 covariates
+nearZeroVar(training, saveMetrics=TRUE)
+```
+
+# Exploratory data analysis
+```{r warning=FALSE}
+# exploratory data analysis (thank you stackflow community for assistance with violin plots)
+columns <- c(grep("belt", names(training)), which(names(training) == "classe"))
+meltedData <- melt(training[, columns], id="classe")
+ggplot(meltedData, aes(x=classe, y=value)) +
+        geom_violin(aes(color=classe, fill=classe)) +
+        facet_wrap(~ variable, scales="free_y")
+
+columns <- c(grep("_arm", names(training)), which(names(training) == "classe"))
+meltedData <- melt(training[, columns], id="classe")
+ggplot(meltedData, aes(x=classe, y=value)) +
+        geom_violin(aes(color=classe, fill=classe)) +
+        facet_wrap(~ variable, scales="free_y")
+
+columns <- c(grep("dumbbell", names(training)), which(names(training) == "classe"))
+meltedData <- melt(training[, columns], id="classe")
+ggplot(meltedData, aes(x=classe, y=value)) +
+        geom_violin(aes(color=classe, fill=classe)) +
+        facet_wrap(~ variable, scales="free_y")
+
+columns <- c(grep("forearm", names(training)), which(names(training) == "classe"))
+meltedData <- melt(training[, columns], id="classe")
+ggplot(meltedData, aes(x=classe, y=value)) +
+        geom_violin(aes(color=classe, fill=classe)) +
+        facet_wrap(~ variable, scales="free_y")
+```
+
+
+# Build a tree model
+```{r warning=FALSE}
+# trees
+modelFitTrees <- train(classe ~ .,data=training, method="rpart")
+print(modelFitTrees)
+fancyRpartPlot(modelFitTrees$finalModel)
+pred <- predict(modelFitTrees, newdata=testing)
+confusionMatrixTrees <- confusionMatrix(pred,testing$classe)
+confusionMatrixTrees
+setNames((outOfSampleErrorRate <- 1-confusionMatrixTrees$overall[1]), "outOfSampleErrorRate")
+```
+
+The tree model, while easy to comprehend and plot, produced an out of sample error rate of 50% during cross-validation including an inability to ever detect a class D exercise.
+
+# Build a bagging model
+```{r warning=FALSE}
+modelFitBagging <- train(classe ~ .,data=training, method="treebag")
+print(modelFitBagging)
+pred <- predict(modelFitBagging, newdata=testing)
+confusionMatrixBagging <- confusionMatrix(pred,testing$classe)
+confusionMatrixBagging
+setNames((outOfSampleErrorRate <- 1-confusionMatrixBagging$overall[1]), "outOfSampleErrorRate")
+```
+
+The bagging model produced much better results at an out of sample error rate of only 1.27% using cross-validation against the test dataset. Unlike the previous model, this model detected class D exercises.
+
+# Build a random forest model
+```{r warning=FALSE}
+modelFitRandomForest <- train(classe ~ .,data=training, method="rf")
+print(modelFitRandomForest)
+pred <- predict(modelFitRandomForest, newdata=testing)
+confusionMatrixRandomForest <- confusionMatrix(pred,testing$classe)
+confusionMatrixRandomForest
+setNames((outOfSampleErrorRate <- 1-confusionMatrixRandomForest$overall[1]), "outOfSampleErrorRate")
+```
+
+The random forest model achieved over 99% accuracy during cross-validation, which for this paper, is sufficent to terminate the study. The out of sample error rate detected during cross-validation was 0.58%. The most important variables are listed below.
+
+```{r warning=FALSE}
+varImp(modelFitRandomForest)
+```
+
+# Final submission test
+```{r warning=FALSE}
+# process submission test set
+submissionDataSet <- read.csv("pml-testing.csv")
+predictionSubmission <- predict(modelFitRandomForest, newdata=submissionDataSet)
+
+# write out predictions
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+pml_write_files(predictionSubmission)
+```
+
+The final submission test achieved a 100% success rate.
+
